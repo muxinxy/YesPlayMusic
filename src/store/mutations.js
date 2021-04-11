@@ -9,6 +9,9 @@ export default {
   changeMusicQuality(state, value) {
     state.settings.musicQuality = value;
   },
+  changeLyricFontSize(state, value) {
+    state.settings.lyricFontSize = value;
+  },
   changeOutputDevice(state, deviceId) {
     state.settings.outputDevice = deviceId;
   },
@@ -38,5 +41,11 @@ export default {
   },
   toggleLyrics(state) {
     state.showLyrics = !state.showLyrics;
+  },
+  updateDailyTracks(state, dailyTracks) {
+    state.dailyTracks = dailyTracks;
+  },
+  updateLastfm(state, session) {
+    state.lastfm = session;
   },
 };

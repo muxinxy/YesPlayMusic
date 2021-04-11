@@ -1,14 +1,14 @@
 import { getTrackDetail, scrobble, getMP3 } from "@/api/track";
 import { shuffle } from "lodash";
 import { Howler, Howl } from "howler";
-import localforage from "localforage";
-import { cacheTrack } from "@/utils/db";
+import { cacheTrackSource, getTrackSource } from "@/utils/db";
 import { getAlbum } from "@/api/album";
 import { getPlaylistDetail } from "@/api/playlist";
 import { getArtist } from "@/api/artist";
 import { personalFM, fmTrash } from "@/api/others";
 import store from "@/store";
 import { isAccountLoggedIn } from "@/utils/auth";
+import { trackUpdateNowPlaying, trackScrobble } from "@/api/lastfm";
 
 const electron =
   process.env.IS_ELECTRON === true ? window.require("electron") : null;
@@ -160,16 +160,28 @@ export default class {
     this._shuffledList = shuffle(list);
     if (firstTrackID !== "first") this._shuffledList.unshift(firstTrackID);
   }
-  async _scrobble(complete = false) {
-    let time = this._howler.seek();
-    if (complete) {
-      time = ~~(this._currentTrack.dt / 100);
-    }
+  async _scrobble(track, time, complete = false) {
+    const trackDuration = ~~(track.dt / 1000);
+    time = complete ? trackDuration : time;
     scrobble({
-      id: this._currentTrack.id,
+      id: track.id,
       sourceid: this.playlistSource.id,
       time,
     });
+    if (
+      store.state.lastfm.key !== undefined &&
+      (time >= trackDuration / 2 || time >= 240)
+    ) {
+      const timestamp = ~~(new Date().getTime() / 1000) - time;
+      trackScrobble({
+        artist: track.ar[0].name,
+        track: track.name,
+        timestamp,
+        album: track.al.name,
+        trackNumber: track.no,
+        duration: trackDuration,
+      });
+    }
   }
   _playAudioSource(source, autoplay = true) {
     Howler.unload();
@@ -188,10 +200,9 @@ export default class {
     });
   }
   _getAudioSourceFromCache(id) {
-    let tracks = localforage.createInstance({ name: "tracks" });
-    return tracks.getItem(id).then((t) => {
-      if (t === null) return null;
-      const source = URL.createObjectURL(new Blob([t.mp3]));
+    return getTrackSource(id).then((t) => {
+      if (!t) return null;
+      const source = URL.createObjectURL(new Blob([t.source]));
       return source;
     });
   }
@@ -203,7 +214,7 @@ export default class {
         if (result.data[0].freeTrialInfo !== null) return null; // 跳过只能试听的歌曲
         const source = result.data[0].url.replace(/^http:/, "https:");
         if (store.state.settings.automaticallyCacheSongs) {
-          cacheTrack(track.id, source);
+          cacheTrackSource(track, source, result.data[0].br);
         }
         return source;
       });
@@ -217,7 +228,8 @@ export default class {
     if (process.env.IS_ELECTRON !== true) return null;
     const source = ipcRenderer.sendSync("unblock-music", track);
     if (store.state.settings.automaticallyCacheSongs && source?.url) {
-      cacheTrack(track.id, source.url);
+      // TODO: 将unblockMusic字样换成真正的来源（比如酷我咪咕等）
+      cacheTrackSource(track, source.url, 128000, "unblockMusic");
     }
     return source?.url;
   }
@@ -235,6 +247,7 @@ export default class {
     autoplay = true,
     ifUnplayableThen = "playNextTrack"
   ) {
+    if (autoplay) this._scrobble(this.currentTrack, this._howler.seek(), true);
     return getTrackDetail(id).then((data) => {
       let track = data.songs[0];
       this._currentTrack = track;
@@ -242,6 +255,7 @@ export default class {
       return this._getAudioSource(track).then((source) => {
         if (source) {
           this._playAudioSource(source, autoplay);
+          this._cacheNextTrack();
           return source;
         } else {
           store.dispatch("showToast", `无法播放 ${track.name}`);
@@ -250,6 +264,13 @@ export default class {
             : this.playPrevTrack();
         }
       });
+    });
+  }
+  _cacheNextTrack() {
+    const nextTrack = this._getNextTrack();
+    getTrackDetail(nextTrack[0]).then((data) => {
+      let track = data.songs[0];
+      this._getAudioSource(track);
     });
   }
   _loadSelfFromLocalStorage() {
@@ -278,6 +299,15 @@ export default class {
       });
       navigator.mediaSession.setActionHandler("seekto", (event) => {
         this.seek(event.seekTime);
+        this._updateMediaSessionPositionState();
+      });
+      navigator.mediaSession.setActionHandler("seekbackward", (event) => {
+        this.seek(this.seek() - (event.seekOffset || 10));
+        this._updateMediaSessionPositionState();
+      });
+      navigator.mediaSession.setActionHandler("seekforward", (event) => {
+        this.seek(this.seek() + (event.seekOffset || 10));
+        this._updateMediaSessionPositionState();
       });
     }
   }
@@ -299,8 +329,19 @@ export default class {
       ],
     });
   }
+  _updateMediaSessionPositionState() {
+    if ("mediaSession" in navigator === false) {
+      return;
+    }
+    if ("setPositionState" in navigator.mediaSession) {
+      navigator.mediaSession.setPositionState({
+        duration: ~~(this.currentTrack.dt / 1000),
+        playbackRate: 1.0,
+        position: this.seek(),
+      });
+    }
+  }
   _nextTrackCallback() {
-    this._scrobble(true);
     if (this.repeatMode === "one") {
       this._replaceCurrentTrack(this._currentTrack.id);
     } else {
@@ -312,6 +353,26 @@ export default class {
       this._personalFMNextTrack = result.data[0];
       return this._personalFMNextTrack;
     });
+  }
+  _playDiscordPresence(track, seekTime = 0) {
+    if (
+      process.env.IS_ELECTRON !== true ||
+      store.state.settings.enableDiscordRichPresence === false
+    ) {
+      return null;
+    }
+    let copyTrack = { ...track };
+    copyTrack.dt -= seekTime * 1000;
+    ipcRenderer.send("playDiscordPresence", copyTrack);
+  }
+  _pauseDiscordPresence(track) {
+    if (
+      process.env.IS_ELECTRON !== true ||
+      store.state.settings.enableDiscordRichPresence === false
+    ) {
+      return null;
+    }
+    ipcRenderer.send("pauseDiscordPresence", track);
   }
 
   currentTrackID() {
@@ -361,12 +422,23 @@ export default class {
     this._howler.pause();
     this._playing = false;
     document.title = "YesPlayMusic";
+    this._pauseDiscordPresence(this._currentTrack);
   }
   play() {
     if (this._howler.playing()) return;
     this._howler.play();
     this._playing = true;
     document.title = `${this._currentTrack.name} · ${this._currentTrack.ar[0].name} - YesPlayMusic`;
+    this._playDiscordPresence(this._currentTrack, this.seek());
+    if (store.state.lastfm.key !== undefined) {
+      trackUpdateNowPlaying({
+        artist: this.currentTrack.ar[0].name,
+        track: this.currentTrack.name,
+        album: this.currentTrack.al.name,
+        trackNumber: this.currentTrack.no,
+        duration: ~~(this.currentTrack.dt / 1000),
+      });
+    }
   }
   playOrPause() {
     if (this._howler.playing()) {
@@ -376,7 +448,11 @@ export default class {
     }
   }
   seek(time = null) {
-    if (time !== null) this._howler.seek(time);
+    if (time !== null) {
+      this._howler.seek(time);
+      if (this._playing)
+        this._playDiscordPresence(this._currentTrack, this.seek());
+    }
     return this._howler === null ? 0 : this._howler.seek();
   }
   mute() {
@@ -388,7 +464,13 @@ export default class {
     }
   }
   setOutputDevice() {
-    if (this._howler._sounds.length <= 0) return;
+    if (
+      process.env.IS_ELECTRON !== true ||
+      this._howler._sounds.length <= 0 ||
+      !this._howler._sounds[0]._node
+    ) {
+      return;
+    }
     this._howler._sounds[0]._node.setSinkId(store.state.settings.outputDevice);
   }
 
@@ -431,6 +513,12 @@ export default class {
       let trackIDs = data.hotSongs.map((t) => t.id);
       this.replacePlaylist(trackIDs, id, "artist", trackID);
     });
+  }
+  playTrackOnListByID(id, listName = "default") {
+    if (listName === "default") {
+      this._current = this._list.findIndex((t) => t === id);
+    }
+    this._replaceCurrentTrack(id);
   }
   addTrackToPlayNext(trackID, playNow = false) {
     this._playNextList.push(trackID);

@@ -26,9 +26,13 @@ const options = {
 const store = new Vuex.Store(options);
 
 if ([undefined, null].includes(store.state.settings.lang)) {
-  let lang = "en";
-  if (navigator.language.slice(0, 2) === "zh") lang = "zh-CN";
-  store.state.settings.lang = lang;
+  const defaultLang = "en";
+  const langMapper = new Map()
+    .set("zh", "zh-CN")
+    .set("en", "en")
+    .set("tr", "tr");
+  store.state.settings.lang =
+    langMapper.get(navigator.language.slice(0, 2)) || defaultLang;
   localStorage.setItem("settings", JSON.stringify(store.state.settings));
 }
 

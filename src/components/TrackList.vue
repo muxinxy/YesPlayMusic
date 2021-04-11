@@ -119,11 +119,8 @@ export default {
   },
   methods: {
     ...mapMutations(["updateLikedSongs", "updateModal"]),
-    ...mapActions(["nextTrack", "playTrackOnListByID", "showToast"]),
+    ...mapActions(["nextTrack", "showToast"]),
     openMenu(e, track) {
-      if (!track.playable) {
-        return;
-      }
       this.rightClickedTrack = track;
       this.$refs.menu.openMenu(e);
     },
@@ -141,7 +138,7 @@ export default {
       } else if (this.dbclickTrackFunc === "none") {
         // do nothing
       } else if (this.dbclickTrackFunc === "playTrackOnListByID") {
-        this.playTrackOnListByID(trackID);
+        this.$store.state.player.playTrackOnListByID(trackID);
       } else if (this.dbclickTrackFunc === "playPlaylistByID") {
         this.$store.state.player.playPlaylistByID(this.id, trackID);
       } else if (this.dbclickTrackFunc === "playAList") {
@@ -150,6 +147,14 @@ export default {
           trackIDs,
           this.id,
           "artist",
+          trackID
+        );
+      } else if (this.dbclickTrackFunc === "dailyTracks") {
+        let trackIDs = this.tracks.map((t) => t.id);
+        this.$store.state.player.replacePlaylist(
+          trackIDs,
+          "/daily/songs",
+          "url",
           trackID
         );
       }

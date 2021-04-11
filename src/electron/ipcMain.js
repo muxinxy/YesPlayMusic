@@ -1,5 +1,8 @@
-import { app, ipcMain, dialog } from "electron";
+import { app, dialog, globalShortcut, ipcMain } from "electron";
 import match from "@njzy/unblockneteasemusic";
+import { registerGlobalShortcut } from "@/electron/globalShortcut";
+
+const client = require("discord-rich-presence")("818936529484906596");
 
 export function initIpcMain(win, store) {
   ipcMain.on("unblock-music", (event, track) => {
@@ -60,5 +63,38 @@ export function initIpcMain(win, store) {
 
   ipcMain.on("settings", (event, options) => {
     store.set("settings", options);
+    const isRegisterShortcut = globalShortcut.isRegistered(
+      "Alt+CommandOrControl+P"
+    );
+    if (options.enableGlobalShortcut) {
+      !isRegisterShortcut && registerGlobalShortcut(win);
+    } else {
+      isRegisterShortcut && globalShortcut.unregisterAll();
+    }
+  });
+
+  ipcMain.on("playDiscordPresence", (event, track) => {
+    client.updatePresence({
+      details: track.name + " - " + track.ar.map((ar) => ar.name).join(","),
+      state: track.al.name,
+      endTimestamp: Date.now() + track.dt,
+      largeImageKey: "logo",
+      largeImageText: "Listening " + track.name,
+      smallImageKey: "play",
+      smallImageText: "Playing",
+      instance: true,
+    });
+  });
+
+  ipcMain.on("pauseDiscordPresence", (event, track) => {
+    client.updatePresence({
+      details: track.name + " - " + track.ar.map((ar) => ar.name).join(","),
+      state: track.al.name,
+      largeImageKey: "logo",
+      largeImageText: "YesPlayMusic",
+      smallImageKey: "pause",
+      smallImageText: "Pause",
+      instance: true,
+    });
   });
 }

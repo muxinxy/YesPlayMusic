@@ -34,6 +34,8 @@ export default {
       afterCreateAddTrackID: 0,
     },
   },
+  dailyTracks: [],
+  lastfm: JSON.parse(localStorage.getItem("lastfm")) || {},
   player: JSON.parse(localStorage.getItem("player")),
   settings: JSON.parse(localStorage.getItem("settings")),
   data: JSON.parse(localStorage.getItem("data")),
